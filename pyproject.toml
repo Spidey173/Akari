@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "akari-agent"
+version = "0.2.0"
+description = "Akari (明かり): Autonomous Research Paper Digest & QA Agent"
+authors = [{ name = "Akari Contributors" }]
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "requests>=2.31",
+    "feedparser>=6.0",
+    "PyMuPDF>=1.24",
+    "chromadb>=0.5",
+    "sentence-transformers>=3.0",
+    "google-genai>=1.0",
+    "python-dotenv>=1.0",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+groq = [
+    "groq>=0.9",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
