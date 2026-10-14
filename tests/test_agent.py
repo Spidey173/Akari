@@ -303,5 +303,46 @@ class TestPipeline(unittest.TestCase):
         self.assertEqual(state.briefing.title, "Mock Paper Title")
 
 
+    def test_pipeline_query_reformulation_on_zero_results(self):
+        """Tests that the agentic loop catches zero search results on noisy queries and reformulates."""
+        mock_entry = MagicMock()
+        mock_entry.id = "http://arxiv.org/abs/2401.55555v1"
+        mock_entry.title = "Sparse Attention Paper"
+        mock_entry.authors = [MagicMock(name="Author")]
+        mock_entry.summary = "Abstract content"
+        mock_entry.links = [MagicMock(href="http://example.com/pdf", title="pdf")]
+        mock_entry.published = "2024-01-01"
+        mock_entry.tags = [{"term": "cs.AI"}]
+
+        # First search call returns empty list, second call (after reformulation) returns mock_entry
+        query_calls = []
+        def mock_query(q, max_results=5):
+            query_calls.append(q)
+            if len(query_calls) == 1:
+                return []
+            return [mock_entry]
+
+        raw_briefing = json.dumps({
+            "summary": "Mock summary",
+            "problem_statement": "Mock problem",
+            "method_bullets": ["Step 1"],
+            "key_results": ["Result 1"],
+            "limitations": ["Limitation 1", "Limitation 2"],
+            "followup_questions": ["Question 1"]
+        })
+        llm = MockLLM(response=raw_briefing)
+
+        with patch("agent.nodes.arxiv_retrieval._query_arxiv", side_effect=mock_query), \
+             patch("agent.nodes.fetch_parse._download_pdf", return_value="/tmp/mock.pdf"), \
+             patch("agent.nodes.fetch_parse._extract_text_layout_aware", return_value=("Abstract\nMock paper body with plenty of words to exceed threshold...", 1)):
+            state = run_pipeline("recent work on sparse attention", llm)
+
+        self.assertEqual(state.status, NodeStatus.OK)
+        self.assertGreaterEqual(len(query_calls), 2)
+        self.assertIn("sparse attention", query_calls[-1])
+        self.assertNotIn("recent", query_calls[-1])
+
+
 if __name__ == "__main__":
     unittest.main()
+
