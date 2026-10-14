@@ -49,8 +49,12 @@ def run_pipeline(
     # Self-Correction Loop: If topic search yielded 0 candidates, attempt query simplification
     if state.status == NodeStatus.FAILED and state.intent == "topic_search":
         original_query = state.search_query
-        # Strip noisy qualifiers to widen arXiv recall
-        simplified = " ".join([w for w in original_query.split() if w.lower() not in {"recent", "work", "paper", "papers", "survey", "latest", "overview"}])
+        # Strip noisy qualifiers and prepositions to widen arXiv recall
+        noise_words = {
+            "recent", "work", "paper", "papers", "survey", "latest", "overview",
+            "on", "about", "regarding", "for", "in", "the", "a", "an",
+        }
+        simplified = " ".join([w for w in original_query.split() if w.lower() not in noise_words])
         if simplified and simplified != original_query:
             print(f"   [Self-Correction] Zero results for '{original_query}'. Reformulating query to: '{simplified}'")
             state.search_query = simplified
