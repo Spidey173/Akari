@@ -52,39 +52,54 @@ python main.py "your topic" --provider ollama   # fully local, needs `ollama ser
 ### State Graph
 
 ```
-                    ┌─────────────────────┐
-  user query   ───▶ │ Query Understanding  │  (regex: arXiv ID vs topic)
-                    └──────────┬───────────┘
-                               ▼
-                    ┌─────────────────────┐
-                    │   arXiv Retrieval    │  (official Atom API)
-                    └──────────┬───────────┘
-                               ▼
-                    ┌─────────────────────┐
-                    │  Selection/Ranking   │  (lexical overlap scoring;
-                    │  (skipped if exact   │   skipped for direct ID lookup)
-                    │   ID was given)      │
-                    └──────────┬───────────┘
-                               ▼
-                    ┌─────────────────────┐
-                    │   Fetch & Parse      │  (PyMuPDF; degrades to
-                    │                      │   abstract-only on failure)
-                    └──────────┬───────────┘
-                               ▼
-                    ┌─────────────────────┐
-                    │  Chunk & Embed       │  (sentence-aware chunking,
-                    │                      │   per-section; Chroma + MiniLM)
-                    └──────────┬───────────┘
-                               ▼
-                    ┌─────────────────────┐
-                    │   Summarize          │  (LLM call → structured JSON
-                    │                      │   → Briefing dataclass)
-                    └──────────┬───────────┘
-                               ▼
-                    ┌─────────────────────┐
-  user questions ──▶│      QA Loop         │  (RAG: retrieve top-k chunks →
-       ◀────────────│   (interactive)      │   LLM answers only from those
-       answers      └──────────────────────┘   chunks, or explicitly declines)
+                    ┌─────────────────────────┐
+  user query   ───▶ │ 1. Query Understanding  │ (regex router: arXiv ID/URL vs topic)
+                    └────────────┬────────────┘
+                                 │
+                                 ▼
+                     ┌───────────────────────┐
+                     │  2. arXiv Retrieval   │ (official Atom API via feedparser)
+                     └───────────┬───────────┘
+                                 │
+                       [0 results on topic?]
+                                 │
+                       yes ──────┴──────▶ [Query Reformulation Loop]
+                                          (strips noise qualifiers & retries)
+                                 │ no
+                                 ▼
+                     ┌───────────────────────┐
+                     │ 3. Candidate Ranking  │ (Hybrid: Lexical Overlap + Dense MiniLM)
+                     │                       │ ➔ Reciprocal Rank Fusion (RRF, k=60)
+                     │                       │ ➔ Optional Rich interactive picker
+                     └───────────┬───────────┘
+                                 │
+                                 ▼
+                     ┌───────────────────────┐
+                     │   4. Fetch & Parse    │ (PyMuPDF column geometry sorting)
+                     │                       │ ➔ Pivot to ar5iv HTML on layout failure
+                     │                       │ ➔ Graceful degradation to abstract
+                     └───────────┬───────────┘
+                                 │
+                                 ▼
+                     ┌───────────────────────┐
+                     │   5. Chunk & Embed    │ (Sentence-boundary per-section chunking)
+                     │                       │ ➔ Local ChromaDB + all-MiniLM-L6-v2
+                     └───────────┬───────────┘
+                                 │
+                                 ▼
+                     ┌───────────────────────┐
+                     │     6. Summarize      │ (Structured section-aware extraction)
+                     │                       │ ➔ Pydantic/dataclass schema fallback
+                     └───────────┬───────────┘
+                                 │
+                 ┌───────────────┴───────────────┐
+                 ▼                               ▼
+     ┌───────────────────────┐       ┌───────────────────────┐
+     │  SQLite Session Cache │       │   7. Grounded QA Loop │ ◀─── user questions
+     │ (~/.cache/akari/db)   │       │ (Cosine guardrail +   │
+     │ Instant resumption via│       │  NOT_IN_PAPER refusal)│ ────▶ answers + section
+     │ `python main.py --res`│       └───────────────────────┘       citations
+     └───────────────────────┘
 ```
 
 ### Shared State
@@ -331,4 +346,25 @@ python -m unittest discover tests
 ```
 
 All unit tests run offline using mocked responses without requiring an external LLM API key or network access. Run `python main.py` on a machine with normal internet access to exercise the full live pipeline end-to-end against the arXiv API.
+
+---
+
+## Technical Interview Guide (Fresher Talking Points)
+
+If an interviewer asks you about this project, here are the real, honest engineering decisions and tradeoffs you made, explained with technical clarity:
+
+### 1. Why build your own state graph instead of using LangChain or LangGraph?
+> *"LangGraph and LangChain are powerful, but for an engineering pipeline of this scope, importing heavy frameworks introduces hidden abstractions, complex debugging, and dependency bloat. I wanted to deeply understand and control state management, error handling, and node transitions from first principles. Implementing a typed Python dataclass (`GraphState`) and deterministic nodes made it trivial to inspect state, write fast offline unit tests with mocks, and handle failure fallbacks cleanly without framework overhead."*
+
+### 2. How did you handle PDF parsing challenges (two columns, math, figures)?
+> *"Standard PDF extractors often read across two-column scientific papers horizontally, garbling sentences together. I addressed this with PyMuPDF block geometry: inspecting bounding box coordinates `(x0, y0)` and sorting blocks by horizontal column boundaries before stitching text. Furthermore, because some PDFs are scanned or fail layout extraction, I added an automated fallback to ar5iv clean HTML before gracefully degrading to abstract-only mode if text density is below a strict threshold."*
+
+### 3. Why did you use Reciprocal Rank Fusion (RRF) for candidate ranking?
+> *"Keyword matching alone fails when a user searches 'sparse attention' but a seminal paper describes 'submodular KV cache pruning' or 'linear complexity'. Dense semantic embeddings solve this vocabulary mismatch, but purely relying on embeddings can sometimes miss exact technical keyword matches. I combined lexical overlap scoring with dense cosine similarity from a local `all-MiniLM-L6-v2` bi-encoder using Reciprocal Rank Fusion ($k=60$), balancing precision and recall without needing expensive external LLM reranking calls."*
+
+### 4. How do you prevent hallucinations in the QA loop?
+> *"Hallucination mitigation is handled at three distinct layers: First, retrieval-bounded context: the LLM is only provided the top-5 retrieved chunks, never the whole document. Second, a strict programmatic refusal trigger: the prompt instructs the model to return a distinct refusal marker (`NOT_IN_PAPER`) if the context lacks the answer, which my code intercepts to deliver a clear disclaimer. Third, distance scoring: I check the cosine distance of the retrieved chunks in ChromaDB; if the semantic distance is high, the answer is flagged as low confidence."*
+
+### 5. Why use a local embedding model instead of OpenAI/Gemini embeddings?
+> *"Running `all-MiniLM-L6-v2` locally via `sentence-transformers` ensures the core vector indexing runs 100% free on any machine with zero API key dependencies, zero network egress costs, and consistent embedding dimensions across sessions."*
 
