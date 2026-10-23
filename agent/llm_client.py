@@ -12,9 +12,11 @@ from __future__ import annotations
 import os
 import time
 from abc import ABC, abstractmethod
+from typing import Any
 
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
 except ImportError:
     pass
@@ -35,9 +37,7 @@ class GeminiClient(LLMClient):
         try:
             from google import genai
         except ImportError as e:
-            raise ImportError(
-                "google-genai not installed. Run: pip install google-genai"
-            ) from e
+            raise ImportError("google-genai not installed. Run: pip install google-genai") from e
 
         api_key = api_key or os.environ.get("GEMINI_API_KEY")
         if not api_key:
@@ -68,7 +68,7 @@ class GeminiClient(LLMClient):
                 return (resp.text or "").strip()
             except Exception as e:  # noqa: BLE001 - free-tier SDK raises assorted errors
                 last_err = e
-                wait = 2 ** attempt * 2
+                wait = 2**attempt * 2
                 print(f"  [llm] Gemini call failed ({e}); retrying in {wait}s...")
                 time.sleep(wait)
         raise RuntimeError(f"Gemini generation failed after retries: {last_err}")
@@ -85,12 +85,14 @@ class GroqClient(LLMClient):
 
         api_key = api_key or os.environ.get("GROQ_API_KEY")
         if not api_key:
-            raise RuntimeError("GROQ_API_KEY not set. Get a free key at https://console.groq.com/keys")
+            raise RuntimeError(
+                "GROQ_API_KEY not set. Get a free key at https://console.groq.com/keys"
+            )
         self._client = Groq(api_key=api_key)
         self.model_name = model or os.environ.get("GROQ_MODEL") or "openai/gpt-oss-20b"
 
     def generate(self, prompt: str, system: str | None = None, max_tokens: int = 2048) -> str:
-        messages = []
+        messages: list[Any] = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
@@ -100,7 +102,8 @@ class GroqClient(LLMClient):
             max_tokens=max_tokens,
             temperature=0.2,
         )
-        return resp.choices[0].message.content.strip()
+        content = resp.choices[0].message.content
+        return (content or "").strip()
 
 
 class OllamaClient(LLMClient):
@@ -140,4 +143,3 @@ def build_llm_client(provider: str | None = None) -> LLMClient:
     if provider == "ollama":
         return OllamaClient()
     raise ValueError(f"Unknown provider: {provider}")
-

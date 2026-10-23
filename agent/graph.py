@@ -24,7 +24,14 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 from agent.llm_client import LLMClient
-from agent.nodes import arxiv_retrieval, chunk_embed, fetch_parse, query_understanding, ranking, summarize
+from agent.nodes import (
+    arxiv_retrieval,
+    chunk_embed,
+    fetch_parse,
+    query_understanding,
+    ranking,
+    summarize,
+)
 from agent.state import GraphState, NodeStatus, PaperMetadata
 
 
@@ -51,19 +58,36 @@ def run_pipeline(
         original_query = state.search_query
         # Strip noisy qualifiers and prepositions to widen arXiv recall
         noise_words = {
-            "recent", "work", "paper", "papers", "survey", "latest", "overview",
-            "on", "about", "regarding", "for", "in", "the", "a", "an",
+            "recent",
+            "work",
+            "paper",
+            "papers",
+            "survey",
+            "latest",
+            "overview",
+            "on",
+            "about",
+            "regarding",
+            "for",
+            "in",
+            "the",
+            "a",
+            "an",
         }
         simplified = " ".join([w for w in original_query.split() if w.lower() not in noise_words])
         if simplified and simplified != original_query:
-            print(f"   [Self-Correction] Zero results for '{original_query}'. Reformulating query to: '{simplified}'")
+            print(
+                f"   [Self-Correction] Zero results for '{original_query}'. Reformulating query to: '{simplified}'"
+            )
             state.search_query = simplified
             state.status = NodeStatus.OK
             state.errors.clear()
             state = arxiv_retrieval.run(state)
 
     if state.status == NodeStatus.FAILED:
-        print(f"   Pipeline halted at 'arxiv_retrieval': {state.errors[-1] if state.errors else 'unknown error'}")
+        print(
+            f"   Pipeline halted at 'arxiv_retrieval': {state.errors[-1] if state.errors else 'unknown error'}"
+        )
         return state
 
     # 3. Hybrid Semantic Ranking & Selection
@@ -81,28 +105,36 @@ def run_pipeline(
             state.log("ranking", f"User selected: {chosen.title[:70]}")
 
     if state.status == NodeStatus.FAILED:
-        print(f"   Pipeline halted at 'ranking': {state.errors[-1] if state.errors else 'unknown error'}")
+        print(
+            f"   Pipeline halted at 'ranking': {state.errors[-1] if state.errors else 'unknown error'}"
+        )
         return state
 
     # 4. Fetch & Parse (Layout-Aware PDF + ar5iv HTML fallback)
     print("-> Running node: fetch_parse")
     state = fetch_parse.run(state)
     if state.status == NodeStatus.FAILED:
-        print(f"   Pipeline halted at 'fetch_parse': {state.errors[-1] if state.errors else 'unknown error'}")
+        print(
+            f"   Pipeline halted at 'fetch_parse': {state.errors[-1] if state.errors else 'unknown error'}"
+        )
         return state
 
     # 5. Chunk & Embed
     print("-> Running node: chunk_embed")
     state = chunk_embed.run(state)
     if state.status == NodeStatus.FAILED:
-        print(f"   Pipeline halted at 'chunk_embed': {state.errors[-1] if state.errors else 'unknown error'}")
+        print(
+            f"   Pipeline halted at 'chunk_embed': {state.errors[-1] if state.errors else 'unknown error'}"
+        )
         return state
 
     # 6. Summarize (Section-aware digest)
     print("-> Running node: summarize")
     state = summarize.run(state, llm)
     if state.status == NodeStatus.FAILED:
-        print(f"   Pipeline halted at 'summarize': {state.errors[-1] if state.errors else 'unknown error'}")
+        print(
+            f"   Pipeline halted at 'summarize': {state.errors[-1] if state.errors else 'unknown error'}"
+        )
         return state
 
     print("\nPipeline complete. Briefing generated, ready for QA.")

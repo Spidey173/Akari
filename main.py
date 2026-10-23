@@ -17,14 +17,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
+import logging
 import sys
 
+from agent.config import ensure_directories
 from agent.graph import run_pipeline
 from agent.llm_client import build_llm_client
 from agent.nodes import qa
 from agent.session import list_sessions, load_session, save_session
-from agent.state import Briefing, GraphState
+from agent.state import GraphState
 from agent.ui import (
     choose_candidate_interactively,
     console,
@@ -33,8 +34,11 @@ from agent.ui import (
     print_briefing_rich,
 )
 
+logger = logging.getLogger("akari")
+
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
 except ImportError:
     pass
@@ -42,6 +46,8 @@ except ImportError:
 
 def briefing_to_dict(state: GraphState) -> dict:
     b = state.briefing
+    if not b:
+        return {}
     return {
         "title": b.title,
         "authors": b.authors,
@@ -64,7 +70,9 @@ def briefing_to_dict(state: GraphState) -> dict:
 
 
 def run_qa_loop(state: GraphState, llm) -> None:
-    console.print("[bold cyan]Ask follow-up questions about the paper[/bold cyan] [dim](type 'exit' or 'quit' to stop)[/dim]:\n")
+    console.print(
+        "[bold cyan]Ask follow-up questions about the paper[/bold cyan] [dim](type 'exit' or 'quit' to stop)[/dim]:\n"
+    )
     while True:
         try:
             question = console.input("[bold green]Q:[/bold green] ").strip()
@@ -80,24 +88,44 @@ def run_qa_loop(state: GraphState, llm) -> None:
         if exchange.grounded:
             console.print(f"[bold cyan]A:[/bold cyan] {exchange.answer}\n")
         else:
-            console.print(f"[bold cyan]A:[/bold cyan] {exchange.answer} [yellow][low confidence / ungrounded in paper][/yellow]\n")
+            console.print(
+                f"[bold cyan]A:[/bold cyan] {exchange.answer} [yellow][low confidence / ungrounded in paper][/yellow]\n"
+            )
 
         # Save session incrementally as QA exchanges occur
         try:
             save_session(state)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Incremental session save failed: %s", e)
+            console.print(f"[dim yellow]Warning: Failed to update cached session: {e}[/dim yellow]")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Akari (明かり): Autonomous Research Paper Digest & QA Agent")
+    ensure_directories()
+
+    parser = argparse.ArgumentParser(
+        description="Akari (明かり): Autonomous Research Paper Digest & QA Agent"
+    )
     parser.add_argument("query", nargs="?", help="Topic, arXiv ID, or arXiv URL")
-    parser.add_argument("--provider", default=None, choices=["gemini", "groq", "ollama"], help="LLM provider (defaults to available key)")
+    parser.add_argument(
+        "--provider",
+        default=None,
+        choices=["gemini", "groq", "ollama"],
+        help="LLM provider (defaults to available key)",
+    )
     parser.add_argument("--save", default=None, help="Custom path to save the briefing JSON")
     parser.add_argument("--no-qa", action="store_true", help="Skip the interactive QA loop")
-    parser.add_argument("--interactive", action="store_true", help="Interactively choose from ranked candidates on topic search")
-    parser.add_argument("--resume", default=None, help="Resume QA on a previously indexed paper by arXiv ID")
-    parser.add_argument("--list-sessions", action="store_true", help="List all previously cached paper digests")
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Interactively choose from ranked candidates on topic search",
+    )
+    parser.add_argument(
+        "--resume", default=None, help="Resume QA on a previously indexed paper by arXiv ID"
+    )
+    parser.add_argument(
+        "--list-sessions", action="store_true", help="List all previously cached paper digests"
+    )
     args = parser.parse_args()
 
     print_banner()
@@ -119,21 +147,32 @@ def main() -> None:
     if args.resume:
         cached_state = load_session(args.resume)
         if not cached_state:
-            console.print(f"[red]Error:[/red] No cached session found for arXiv ID: [bold]{args.resume}[/bold]")
+            console.print(
+                f"[red]Error:[/red] No cached session found for arXiv ID: [bold]{args.resume}[/bold]"
+            )
             console.print("Run [cyan]python main.py --list-sessions[/cyan] to view cached papers.")
             sys.exit(1)
 
-        console.print(f"\n[green]✓ Restored session for paper:[/green] [bold white]{cached_state.selected_paper.title}[/bold white]")
+        console.print(
+            f"\n[green]✓ Restored session for paper:[/green] [bold white]{cached_state.selected_paper.title}[/bold white]"
+        )
         print_briefing_rich(cached_state.briefing, parse_degraded=cached_state.parse_degraded)
         if not args.no_qa:
             run_qa_loop(cached_state, llm)
-            save_session(cached_state)
+            try:
+                save_session(cached_state)
+            except Exception as e:
+                console.print(
+                    f"[yellow]Warning: Failed to update session cache on exit: {e}[/yellow]"
+                )
         return
 
     # 3. Handle query input
     query = args.query
     if not query:
-        query = console.input("\n[bold yellow]Enter a research topic, arXiv ID, or arXiv URL:[/bold yellow] ").strip()
+        query = console.input(
+            "\n[bold yellow]Enter a research topic, arXiv ID, or arXiv URL:[/bold yellow] "
+        ).strip()
         if not query:
             console.print("[red]No query provided. Exiting.[/red]")
             sys.exit(1)
@@ -155,20 +194,27 @@ def main() -> None:
     try:
         save_session(state)
     except Exception as e:
-        console.print(f"[dim]Note: Failed to cache session in SQLite: {e}[/dim]")
+        logger.warning("Session persistence error: %s", e)
+        console.print(f"[yellow]Warning: Failed to cache session in database: {e}[/yellow]")
 
     # Save to export JSON file
-    save_path = args.save or f"briefing_{state.selected_paper.arxiv_id.replace('.', '_')}.json"
+    clean_id = state.selected_paper.arxiv_id.replace(".", "_").replace("/", "_")
+    save_path = args.save or f"briefing_{clean_id}.json"
     with open(save_path, "w") as f:
         json.dump(briefing_to_dict(state), f, indent=2)
-    console.print(f"[dim](Briefing saved to {save_path}; session cached for instant resumption)[/dim]\n")
+    console.print(
+        f"[dim](Briefing saved to {save_path}; session cached for instant resumption)[/dim]\n"
+    )
 
     # Interactive QA loop
     if not args.no_qa:
         run_qa_loop(state, llm)
         with open(save_path, "w") as f:
             json.dump(briefing_to_dict(state), f, indent=2)
-        save_session(state)
+        try:
+            save_session(state)
+        except Exception as e:
+            console.print(f"[yellow]Warning: Failed to update session cache after QA: {e}[/yellow]")
         console.print(f"\n[green]Final briefing and QA history saved to {save_path}[/green]")
 
 

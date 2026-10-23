@@ -74,7 +74,9 @@ def run(state: GraphState) -> GraphState:
         if state.intent == "specific_paper" and state.explicit_arxiv_id:
             entries = _query_arxiv("", max_results=1, id_list=state.explicit_arxiv_id)
             if not entries:
-                state.fail("arxiv_retrieval", f"No paper found for arXiv ID {state.explicit_arxiv_id}")
+                state.fail(
+                    "arxiv_retrieval", f"No paper found for arXiv ID {state.explicit_arxiv_id}"
+                )
                 state.status = NodeStatus.FAILED
                 return state
             state.candidates = [_entry_to_metadata(entries[0])]

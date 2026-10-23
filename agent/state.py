@@ -19,7 +19,7 @@ from typing import Any, Optional
 class NodeStatus(Enum):
     OK = "ok"
     RETRY = "retry"
-    FAILED = "failed"          # unrecoverable for this node, but graph can degrade gracefully
+    FAILED = "failed"  # unrecoverable for this node, but graph can degrade gracefully
     NEEDS_USER_INPUT = "needs_user_input"
 
 
@@ -32,7 +32,7 @@ class PaperMetadata:
     pdf_url: str
     published: str
     categories: list[str]
-    score: float = 0.0          # relevance score, set during ranking
+    score: float = 0.0  # relevance score, set during ranking
 
 
 @dataclass
@@ -73,8 +73,8 @@ class GraphState:
     raw_query: str = ""
 
     # ---- query understanding ----
-    intent: str = ""                       # "topic_search" | "specific_paper"
-    search_query: str = ""                 # cleaned query for arXiv API
+    intent: str = ""  # "topic_search" | "specific_paper"
+    search_query: str = ""  # cleaned query for arXiv API
     explicit_arxiv_id: Optional[str] = None
 
     # ---- retrieval ----
@@ -87,7 +87,7 @@ class GraphState:
     pdf_path: Optional[str] = None
     full_text: str = ""
     sections: dict[str, str] = field(default_factory=dict)
-    parse_degraded: bool = False           # True if we fell back to abstract-only etc.
+    parse_degraded: bool = False  # True if we fell back to abstract-only etc.
 
     # ---- chunk & embed ----
     chunks: list[Chunk] = field(default_factory=list)

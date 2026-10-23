@@ -4,10 +4,7 @@ Terminal UI formatting and interactive CLI helpers using Rich.
 
 from __future__ import annotations
 
-from typing import Optional
-
 from rich.console import Console
-from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -19,7 +16,9 @@ console = Console()
 
 def print_banner() -> None:
     title_text = Text("Akari (明かり)", style="bold cyan")
-    subtitle = Text("Autonomous Research Assistant • Stateful arXiv Digest & QA Agent", style="italic dim")
+    subtitle = Text(
+        "Autonomous Research Assistant • Stateful arXiv Digest & QA Agent", style="italic dim"
+    )
     banner = Panel(
         Text.assemble(title_text, "  -  ", subtitle),
         border_style="cyan",
@@ -68,7 +67,9 @@ def choose_candidate_interactively(candidates: list[PaperMetadata]) -> PaperMeta
                 return candidates[val - 1]
             console.print(f"[red]Please enter a number between 1 and {len(candidates)}.[/red]")
         except ValueError:
-            console.print(f"[red]Invalid input. Enter a number between 1 and {len(candidates)}.[/red]")
+            console.print(
+                f"[red]Invalid input. Enter a number between 1 and {len(candidates)}.[/red]"
+            )
 
 
 def print_briefing_rich(b: Briefing, parse_degraded: bool = False) -> None:
@@ -85,7 +86,11 @@ def print_briefing_rich(b: Briefing, parse_degraded: bool = False) -> None:
         meta_info += "\n\n[bold yellow]⚠️ Note: Full-text extraction was degraded (e.g. scanned PDF). Briefing generated primarily from abstract.[/bold yellow]"
 
     console.print("\n")
-    console.print(Panel(meta_info, title="[bold cyan]Executive Paper Briefing[/bold cyan]", border_style="cyan"))
+    console.print(
+        Panel(
+            meta_info, title="[bold cyan]Executive Paper Briefing[/bold cyan]", border_style="cyan"
+        )
+    )
 
     # Sections
     console.print("\n[bold magenta]1. Why this paper matters[/bold magenta]")

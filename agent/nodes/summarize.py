@@ -118,7 +118,8 @@ def run(state: GraphState, llm: LLMClient) -> GraphState:
     section_content = _format_section_digest(state.sections)
     degraded_note = (
         "NOTE: Full-text parsing was degraded; content above is abstract-only."
-        if state.parse_degraded else ""
+        if state.parse_degraded
+        else ""
     )
 
     prompt = PROMPT_TEMPLATE.format(
@@ -137,7 +138,9 @@ def run(state: GraphState, llm: LLMClient) -> GraphState:
 
         limitations = data.get("limitations") or []
         if not limitations:
-            limitations = ["The model did not surface explicit limitations; treat this briefing as a starting point, not a substitute for reading the paper."]
+            limitations = [
+                "The model did not surface explicit limitations; treat this briefing as a starting point, not a substitute for reading the paper."
+            ]
 
         state.briefing = Briefing(
             title=paper.title,

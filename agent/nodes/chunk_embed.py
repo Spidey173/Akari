@@ -8,23 +8,27 @@ node's citations say "this comes from the Method section" and lets us
 weight/filter retrieval by section later if needed.
 
 Embeddings: sentence-transformers `all-MiniLM-L6-v2` running locally (free,
-no API key, ~80MB download on first run) via ChromaDB's default embedding
-function. This keeps the whole pipeline runnable with zero paid keys even
+no API key, ~80MB download on first run) via ChromaDB's embedding function
+interface. This keeps the whole pipeline runnable with zero paid keys even
 if the LLM call itself uses a hosted free tier.
 
-Vector DB: Chroma in local persistent mode (data dir per run), one
-collection per paper so repeated runs / different papers don't collide.
+Vector DB: Chroma in local persistent mode (durable data directory under
+~/.cache/akari/chroma by default), with run-isolated collections to eliminate
+concurrency races between parallel runs.
 """
 
 from __future__ import annotations
 
 import re
+import uuid
+from typing import Optional
 
+from agent.config import CHROMA_DIR
+from agent.embedding import get_chroma_client, get_embedding_function
 from agent.state import Chunk, GraphState, NodeStatus
 
-CHUNK_SIZE = 1000       # chars
-CHUNK_OVERLAP = 150     # chars
-CHROMA_DIR = "/tmp/akari_chroma"
+CHUNK_SIZE = 1000  # chars
+CHUNK_OVERLAP = 150  # chars
 
 
 def _sentence_aware_chunks(text: str, size: int, overlap: int) -> list[str]:
@@ -44,7 +48,7 @@ def _sentence_aware_chunks(text: str, size: int, overlap: int) -> list[str]:
             if len(sent) > size:
                 # single sentence too long -> hard split
                 for i in range(0, len(sent), size - overlap):
-                    chunks.append(sent[i:i + size])
+                    chunks.append(sent[i : i + size])
                 current = ""
             else:
                 current = sent
@@ -63,18 +67,22 @@ def _sentence_aware_chunks(text: str, size: int, overlap: int) -> list[str]:
     return overlapped
 
 
-def run(state: GraphState) -> GraphState:
+def run(state: GraphState, chroma_path: Optional[str] = None) -> GraphState:
     if not state.sections:
         state.fail("chunk_embed", "No parsed sections available to chunk.")
         state.status = NodeStatus.FAILED
         return state
 
-    try:
-        import chromadb
-        from chromadb.utils import embedding_functions
+    if not state.selected_paper:
+        state.fail("chunk_embed", "No paper selected.")
+        state.status = NodeStatus.FAILED
+        return state
 
+    try:
         chunks: list[Chunk] = []
         chunk_idx = 0
+        clean_arxiv_id = state.selected_paper.arxiv_id.replace(".", "_").replace("/", "_")
+
         for section_name, section_text in state.sections.items():
             if not section_text.strip():
                 continue
@@ -85,7 +93,7 @@ def run(state: GraphState) -> GraphState:
                 start = max(start, 0)
                 chunks.append(
                     Chunk(
-                        chunk_id=f"{state.selected_paper.arxiv_id}_{chunk_idx}",
+                        chunk_id=f"{clean_arxiv_id}_{chunk_idx}",
                         text=piece,
                         section=section_name,
                         char_start=start,
@@ -102,19 +110,19 @@ def run(state: GraphState) -> GraphState:
 
         state.chunks = chunks
 
-        client = chromadb.PersistentClient(path=CHROMA_DIR)
-        embed_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name="all-MiniLM-L6-v2"
-        )
-        collection_name = f"paper_{state.selected_paper.arxiv_id.replace('.', '_')}"
+        client = get_chroma_client(path=chroma_path or CHROMA_DIR)
+        embed_fn = get_embedding_function()
 
-        # Fresh collection each run so stale chunks from a previous parse
-        # of the same paper don't leak into retrieval.
-        try:
-            client.delete_collection(collection_name)
-        except Exception:
-            pass
-        collection = client.create_collection(name=collection_name, embedding_function=embed_fn)
+        # Generate a run-scoped collection name to guarantee concurrency isolation.
+        # This prevents concurrent indexing or QA runs from colliding or deleting active collections.
+        run_tag = uuid.uuid4().hex[:8]
+        collection_name = f"paper_{clean_arxiv_id}_{run_tag}"
+
+        collection = client.create_collection(
+            name=collection_name,
+            embedding_function=embed_fn,
+            metadata={"hnsw:space": "cosine"},
+        )
 
         collection.add(
             ids=[c.chunk_id for c in chunks],
@@ -126,7 +134,7 @@ def run(state: GraphState) -> GraphState:
         state.log(
             "chunk_embed",
             f"Created {len(chunks)} chunks across {len(state.sections)} section(s), "
-            f"embedded into Chroma collection '{collection_name}'.",
+            f"embedded into isolated Chroma collection '{collection_name}'.",
         )
         state.status = NodeStatus.OK
 

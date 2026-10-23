@@ -1,23 +1,44 @@
 import json
+import os
+import shutil
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-from agent.state import GraphState, NodeStatus, PaperMetadata, Chunk, Briefing
-from agent.nodes import query_understanding, ranking, fetch_parse, chunk_embed, summarize, qa
+os.environ["AKARI_OFFLINE_TEST"] = "1"
+
+from agent.embedding import MockEmbeddingFunction, set_chroma_client, set_embedding_function
 from agent.graph import run_pipeline
 from agent.llm_client import LLMClient
-from agent.session import save_session, load_session, list_sessions
+from agent.nodes import chunk_embed, fetch_parse, qa, query_understanding, ranking, summarize
+from agent.session import list_sessions, load_session, save_session
+from agent.state import Briefing, GraphState, NodeStatus, PaperMetadata
 
 
 class MockLLM(LLMClient):
     def __init__(self, response: str = "Mock response"):
         self.response = response
-        self.prompts = []
+        self.prompts: list[tuple[str, str | None]] = []
 
     def generate(self, prompt: str, system: str | None = None, max_tokens: int = 2048) -> str:
         self.prompts.append((prompt, system))
         return self.response
+
+
+class BaseOfflineTestCase(unittest.TestCase):
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp()
+        self.chroma_dir = os.path.join(self.test_dir, "chroma")
+        self.pdf_dir = os.path.join(self.test_dir, "pdfs")
+        os.makedirs(self.chroma_dir, exist_ok=True)
+        os.makedirs(self.pdf_dir, exist_ok=True)
+        set_embedding_function(MockEmbeddingFunction())
+        set_chroma_client(None)
+
+    def tearDown(self):
+        set_embedding_function(None)
+        set_chroma_client(None)
+        shutil.rmtree(self.test_dir, ignore_errors=True)
 
 
 class TestQueryUnderstanding(unittest.TestCase):
@@ -94,6 +115,7 @@ class TestRanking(unittest.TestCase):
             candidates=[p1, p2],
         )
         state = ranking.run(state)
+        assert state.selected_paper is not None
         self.assertEqual(state.selected_paper.arxiv_id, "2")
         self.assertGreater(p2.score, p1.score)
 
@@ -131,10 +153,13 @@ class TestFetchParse(unittest.TestCase):
         state = GraphState(
             selected_paper=paper,
         )
-        # Mock download and low-text extraction (e.g. 50 chars across 5 pages)
-        with patch.object(fetch_parse, "_download_pdf", return_value="/fake/path.pdf"), \
-             patch.object(fetch_parse, "_extract_text_layout_aware", return_value=("Very short text", 5)), \
-             patch.object(fetch_parse, "_fetch_ar5iv_html", return_value=None):
+        with (
+            patch.object(fetch_parse, "_download_pdf", return_value="/fake/path.pdf"),
+            patch.object(
+                fetch_parse, "_extract_text_layout_aware", return_value=("Very short text", 5)
+            ),
+            patch.object(fetch_parse, "_fetch_ar5iv_html", return_value=None),
+        ):
             state = fetch_parse.run(state)
 
         self.assertTrue(state.parse_degraded)
@@ -142,14 +167,59 @@ class TestFetchParse(unittest.TestCase):
         self.assertEqual(state.sections, {"abstract": paper.abstract})
         self.assertEqual(state.status, NodeStatus.OK)
 
+    def test_download_atomic_concurrency_safety(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_resp = MagicMock()
+            mock_resp.content = b"%PDF-1.4 Mock PDF binary content"
+            with patch("requests.get", return_value=mock_resp):
+                path = fetch_parse._download_pdf(
+                    "http://example.com/test.pdf", "2401.12345", download_dir=tmpdir
+                )
+                self.assertTrue(os.path.exists(path))
+                self.assertEqual(os.path.basename(path), "2401.12345.pdf")
+                with open(path, "rb") as f:
+                    self.assertEqual(f.read(), mock_resp.content)
 
-class TestChunking(unittest.TestCase):
+
+class TestChunking(BaseOfflineTestCase):
     def test_sentence_aware_chunks(self):
         text = "This is sentence one. This is sentence two. This is sentence three. This is sentence four."
         chunks = chunk_embed._sentence_aware_chunks(text, size=45, overlap=10)
         self.assertTrue(len(chunks) > 1)
         for c in chunks:
             self.assertFalse(c.endswith(" sentenc"))
+
+    def test_collection_isolation_between_runs(self):
+        paper = PaperMetadata(
+            arxiv_id="2401.12345",
+            title="Sample Paper",
+            authors=["Alice"],
+            abstract="Abstract text",
+            pdf_url="http://example.com/pdf",
+            published="2024-01-01",
+            categories=["cs.AI"],
+        )
+        state1 = GraphState(
+            selected_paper=paper,
+            sections={"method": "Sentence one for testing. Sentence two for testing."},
+        )
+        state1 = chunk_embed.run(state1, chroma_path=self.chroma_dir)
+        self.assertEqual(state1.status, NodeStatus.OK)
+        col1 = state1.collection_name
+
+        state2 = GraphState(
+            selected_paper=paper,
+            sections={"method": "Sentence one for testing. Sentence two for testing."},
+        )
+        state2 = chunk_embed.run(state2, chroma_path=self.chroma_dir)
+        self.assertEqual(state2.status, NodeStatus.OK)
+        col2 = state2.collection_name
+
+        # Ensure collection names are isolated to prevent cross-run interference
+        assert col1 is not None and col2 is not None
+        self.assertNotEqual(col1, col2)
+        self.assertTrue(col1.startswith("paper_2401_12345_"))
+        self.assertTrue(col2.startswith("paper_2401_12345_"))
 
 
 class TestSummarize(unittest.TestCase):
@@ -164,14 +234,16 @@ class TestSummarize(unittest.TestCase):
         self.assertEqual(data["summary"], "Test summary")
 
     def test_limitations_enforced(self):
-        raw = json.dumps({
-            "summary": "Summary text",
-            "problem_statement": "Problem",
-            "method_bullets": ["method 1"],
-            "key_results": ["result 1"],
-            "limitations": [],  # Empty limitations returned by model
-            "followup_questions": ["question 1"]
-        })
+        raw = json.dumps(
+            {
+                "summary": "Summary text",
+                "problem_statement": "Problem",
+                "method_bullets": ["method 1"],
+                "key_results": ["result 1"],
+                "limitations": [],  # Empty limitations returned by model
+                "followup_questions": ["question 1"],
+            }
+        )
         llm = MockLLM(response=raw)
         paper = PaperMetadata(
             arxiv_id="2401.00001",
@@ -180,16 +252,17 @@ class TestSummarize(unittest.TestCase):
             abstract="Abstract text",
             pdf_url="http://example.com/pdf",
             published="2024-01-01",
-            categories=["cs.AI"]
+            categories=["cs.AI"],
         )
         state = GraphState(selected_paper=paper, full_text="Full text content here.")
         state = summarize.run(state, llm)
         self.assertEqual(state.status, NodeStatus.OK)
         self.assertIsNotNone(state.briefing)
+        assert state.briefing is not None
         self.assertTrue(len(state.briefing.limitations) > 0)
 
 
-class TestQA(unittest.TestCase):
+class TestQA(BaseOfflineTestCase):
     def test_format_context(self):
         chunks = [
             ("id_1", "method", "We used Adam optimizer."),
@@ -201,20 +274,17 @@ class TestQA(unittest.TestCase):
 
     def test_refusal_marker_handling(self):
         llm = MockLLM(response="NOT_IN_PAPER")
-        state = GraphState(
-            collection_name="test_col",
-            qa_history=[]
-        )
+        state = GraphState(collection_name="test_col", qa_history=[])
         mock_collection = MagicMock()
         mock_collection.query.return_value = {
             "ids": [["c1"]],
             "documents": [["Some unrelated text about climate change."]],
             "metadatas": [[{"section": "intro"}]],
-            "distances": [[0.3]]
+            "distances": [[0.3]],
         }
-        with patch("chromadb.PersistentClient") as mock_client:
-            mock_client.return_value.get_collection.return_value = mock_collection
-            exchange = qa.answer_question(state, llm, "What was the learning rate?")
+        exchange = qa.answer_question(
+            state, llm, "What was the learning rate?", collection=mock_collection
+        )
 
         self.assertFalse(exchange.grounded)
         self.assertIn("couldn't find an answer", exchange.answer)
@@ -259,12 +329,15 @@ class TestSessionCache(unittest.TestCase):
 
             loaded = load_session("2401.12345", db_path=db_path)
             self.assertIsNotNone(loaded)
+            assert loaded is not None
+            assert loaded.selected_paper is not None
+            assert loaded.briefing is not None
             self.assertEqual(loaded.selected_paper.title, "Caching Test Paper")
             self.assertEqual(loaded.collection_name, "paper_2401_12345")
             self.assertEqual(loaded.briefing.summary, "A test summary")
 
 
-class TestPipeline(unittest.TestCase):
+class TestPipeline(BaseOfflineTestCase):
     def test_pipeline_halts_on_empty_query(self):
         llm = MockLLM()
         state = run_pipeline("", llm)
@@ -282,26 +355,38 @@ class TestPipeline(unittest.TestCase):
         mock_entry.published = "2024-01-01"
         mock_entry.tags = [{"term": "cs.AI"}]
 
-        raw_briefing = json.dumps({
-            "summary": "Mock summary for paper",
-            "problem_statement": "Mock problem",
-            "method_bullets": ["Step 1", "Step 2"],
-            "key_results": ["Result 1"],
-            "limitations": ["Limitation 1", "Limitation 2"],
-            "followup_questions": ["Question 1"]
-        })
+        raw_briefing = json.dumps(
+            {
+                "summary": "Mock summary for paper",
+                "problem_statement": "Mock problem",
+                "method_bullets": ["Step 1", "Step 2"],
+                "key_results": ["Result 1"],
+                "limitations": ["Limitation 1", "Limitation 2"],
+                "followup_questions": ["Question 1"],
+            }
+        )
         llm = MockLLM(response=raw_briefing)
 
-        with patch("agent.nodes.arxiv_retrieval._query_arxiv", return_value=[mock_entry]), \
-             patch("agent.nodes.fetch_parse._download_pdf", return_value="/tmp/mock.pdf"), \
-             patch("agent.nodes.fetch_parse._extract_text_layout_aware", return_value=("Abstract\nMock paper body with plenty of words to exceed threshold...", 1)):
+        with (
+            patch("agent.nodes.arxiv_retrieval._query_arxiv", return_value=[mock_entry]),
+            patch("agent.nodes.fetch_parse._download_pdf", return_value="/tmp/mock.pdf"),
+            patch(
+                "agent.nodes.fetch_parse._extract_text_layout_aware",
+                return_value=(
+                    "Abstract\nMock paper body with plenty of words to exceed threshold...",
+                    1,
+                ),
+            ),
+        ):
             state = run_pipeline("2401.12345", llm)
 
         self.assertEqual(state.status, NodeStatus.OK)
         self.assertIsNotNone(state.briefing)
+        assert state.briefing is not None
         self.assertEqual(state.briefing.arxiv_id, "2401.12345")
         self.assertEqual(state.briefing.title, "Mock Paper Title")
-
+        self.assertTrue(len(state.chunks) > 0)
+        self.assertIsNotNone(state.collection_name)
 
     def test_pipeline_query_reformulation_on_zero_results(self):
         """Tests that the agentic loop catches zero search results on noisy queries and reformulates."""
@@ -314,27 +399,37 @@ class TestPipeline(unittest.TestCase):
         mock_entry.published = "2024-01-01"
         mock_entry.tags = [{"term": "cs.AI"}]
 
-        # First search call returns empty list, second call (after reformulation) returns mock_entry
         query_calls = []
+
         def mock_query(q, max_results=5):
             query_calls.append(q)
             if len(query_calls) == 1:
                 return []
             return [mock_entry]
 
-        raw_briefing = json.dumps({
-            "summary": "Mock summary",
-            "problem_statement": "Mock problem",
-            "method_bullets": ["Step 1"],
-            "key_results": ["Result 1"],
-            "limitations": ["Limitation 1", "Limitation 2"],
-            "followup_questions": ["Question 1"]
-        })
+        raw_briefing = json.dumps(
+            {
+                "summary": "Mock summary",
+                "problem_statement": "Mock problem",
+                "method_bullets": ["Step 1"],
+                "key_results": ["Result 1"],
+                "limitations": ["Limitation 1", "Limitation 2"],
+                "followup_questions": ["Question 1"],
+            }
+        )
         llm = MockLLM(response=raw_briefing)
 
-        with patch("agent.nodes.arxiv_retrieval._query_arxiv", side_effect=mock_query), \
-             patch("agent.nodes.fetch_parse._download_pdf", return_value="/tmp/mock.pdf"), \
-             patch("agent.nodes.fetch_parse._extract_text_layout_aware", return_value=("Abstract\nMock paper body with plenty of words to exceed threshold...", 1)):
+        with (
+            patch("agent.nodes.arxiv_retrieval._query_arxiv", side_effect=mock_query),
+            patch("agent.nodes.fetch_parse._download_pdf", return_value="/tmp/mock.pdf"),
+            patch(
+                "agent.nodes.fetch_parse._extract_text_layout_aware",
+                return_value=(
+                    "Abstract\nMock paper body with plenty of words to exceed threshold...",
+                    1,
+                ),
+            ),
+        ):
             state = run_pipeline("recent work on sparse attention", llm)
 
         self.assertEqual(state.status, NodeStatus.OK)
@@ -345,4 +440,3 @@ class TestPipeline(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

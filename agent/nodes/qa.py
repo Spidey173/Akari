@@ -21,6 +21,10 @@ Multi-layer grounding strategy for hallucination mitigation:
 
 from __future__ import annotations
 
+from typing import Any, Optional
+
+from agent.config import CHROMA_DIR
+from agent.embedding import get_chroma_client, get_embedding_function
 from agent.llm_client import LLMClient
 from agent.state import GraphState, QAExchange
 
@@ -64,18 +68,18 @@ def _format_history(history: list[QAExchange], max_turns: int = 3) -> str:
     return "\n".join(f"Q: {ex.question}\nA: {ex.answer}" for ex in recent)
 
 
-def answer_question(state: GraphState, llm: LLMClient, question: str) -> QAExchange:
+def answer_question(
+    state: GraphState,
+    llm: LLMClient,
+    question: str,
+    chroma_path: Optional[str] = None,
+    collection: Optional[Any] = None,
+) -> QAExchange:
     """Runs one QA turn. Returns the exchange and appends it to state.qa_history."""
-    import chromadb
-    from chromadb.utils import embedding_functions
-
-    from agent.nodes.chunk_embed import CHROMA_DIR
-
-    client = chromadb.PersistentClient(path=CHROMA_DIR)
-    embed_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name="all-MiniLM-L6-v2"
-    )
-    collection = client.get_collection(name=state.collection_name, embedding_function=embed_fn)
+    if collection is None:
+        client = get_chroma_client(path=chroma_path or CHROMA_DIR)
+        embed_fn = get_embedding_function()
+        collection = client.get_collection(name=state.collection_name, embedding_function=embed_fn)
 
     results = collection.query(query_texts=[question], n_results=TOP_K)
 
@@ -109,10 +113,9 @@ def answer_question(state: GraphState, llm: LLMClient, question: str) -> QAExcha
     else:
         answer_text = raw_answer
 
-    # Low-similarity heuristic: Chroma's default distance is cosine distance
-    # (lower = more similar). If even the best match is far, flag as weakly
-    # grounded even though the model attempted an answer.
-    if distances and distances[0] > 0.8:
+    # Low-similarity heuristic: with cosine distance (0.0=identical, 1.0=orthogonal),
+    # matches above 0.85 represent weak semantic overlap.
+    if distances and distances[0] > 0.85:
         grounded = False
 
     exchange = QAExchange(

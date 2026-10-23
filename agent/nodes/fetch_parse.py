@@ -13,21 +13,30 @@ Node 4: Layout-Aware Fetch & Parse with Multi-Format Fallback
 
 3. Graceful Degradation:
    Falls back to abstract-only processing if all parsing vectors fail.
+
+4. Concurrent-Safe Atomic Downloads:
+   Downloads write to an isolated temporary file before atomically renaming to
+   destination, avoiding race conditions and corrupted reads in parallel runs.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import time
+import uuid
+from typing import Optional
 
 import requests
 
+from agent.config import DOWNLOAD_DIR
 from agent.state import GraphState, NodeStatus
 
-MAX_CHARS = 120_000         # ~30k tokens, comfortably covers a 15-20 page paper
-MIN_CHARS_PER_PAGE = 200      # below this average, assume scanned/garbled -> degrade
-DOWNLOAD_DIR = "/tmp/akari_pdfs"
+logger = logging.getLogger(__name__)
+
+MAX_CHARS = 120_000  # ~30k tokens, comfortably covers a 15-20 page paper
+MIN_CHARS_PER_PAGE = 200  # below this average, assume scanned/garbled -> degrade
 
 SECTION_HEADING_RE = re.compile(
     r"^\s*(?:\d+\.?\s+)?(abstract|introduction|related work|background|"
@@ -37,22 +46,35 @@ SECTION_HEADING_RE = re.compile(
 )
 
 
-def _download_pdf(url: str, arxiv_id: str) -> str:
-    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-    path = os.path.join(DOWNLOAD_DIR, f"{arxiv_id}.pdf")
+def _download_pdf(url: str, arxiv_id: str, download_dir: Optional[str] = None) -> str:
+    target_dir = download_dir or DOWNLOAD_DIR
+    os.makedirs(target_dir, exist_ok=True)
+    clean_id = arxiv_id.replace("/", "_")
+    path = os.path.join(target_dir, f"{clean_id}.pdf")
     if os.path.exists(path) and os.path.getsize(path) > 1000:
         return path
 
+    temp_path = os.path.join(target_dir, f"{clean_id}.pdf.tmp.{os.getpid()}_{uuid.uuid4().hex[:6]}")
+    last_err: Optional[Exception] = None
     for attempt in range(3):
         try:
             resp = requests.get(url, timeout=30, headers={"User-Agent": "akari/1.0"})
             resp.raise_for_status()
-            with open(path, "wb") as f:
+            with open(temp_path, "wb") as f:
                 f.write(resp.content)
+            # Atomic rename guarantees concurrent readers never see a partial file
+            os.replace(temp_path, path)
             return path
-        except Exception:
+        except Exception as e:
+            last_err = e
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+            logger.warning("Download attempt %d for %s failed: %s", attempt + 1, url, e)
             time.sleep(1.5 * (attempt + 1))
-    raise RuntimeError(f"Failed to download PDF from {url} after retries.")
+    raise RuntimeError(f"Failed to download PDF from {url} after retries: {last_err}")
 
 
 def _extract_text_layout_aware(pdf_path: str) -> tuple[str, int]:
@@ -73,8 +95,8 @@ def _extract_text_layout_aware(pdf_path: str) -> tuple[str, int]:
         mid_x = page_width / 2.0
 
         # Sort blocks: column 1 (left side) top-to-bottom, then column 2 (right side) top-to-bottom
-        def block_sort_key(b):
-            is_right_col = 1 if b[0] >= mid_x - 20 else 0
+        def block_sort_key(b, mid=mid_x):
+            is_right_col = 1 if b[0] >= mid - 20 else 0
             return (is_right_col, b[1])  # (col, y0)
 
         sorted_blocks = sorted(text_blocks, key=block_sort_key)
@@ -97,8 +119,8 @@ def _fetch_ar5iv_html(arxiv_id: str) -> str | None:
             clean_text = re.sub(r"<[^>]+>", " ", resp.text)
             clean_text = re.sub(r"\s+", " ", clean_text).strip()
             return clean_text
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("ar5iv HTML fetch failed for %s: %s", arxiv_id, e)
     return None
 
 
@@ -119,7 +141,7 @@ def _split_sections(text: str) -> dict[str, str]:
     return sections or {"body": text}
 
 
-def run(state: GraphState) -> GraphState:
+def run(state: GraphState, download_dir: Optional[str] = None) -> GraphState:
     paper = state.selected_paper
     if paper is None:
         state.fail("fetch_parse", "No selected paper to fetch.")
@@ -127,7 +149,7 @@ def run(state: GraphState) -> GraphState:
         return state
 
     try:
-        pdf_path = _download_pdf(paper.pdf_url, paper.arxiv_id)
+        pdf_path = _download_pdf(paper.pdf_url, paper.arxiv_id, download_dir=download_dir)
         state.pdf_path = pdf_path
         state.log("fetch_parse", f"Downloaded PDF to {pdf_path}")
 

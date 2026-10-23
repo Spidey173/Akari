@@ -8,26 +8,54 @@ version = "0.2.0"
 description = "Akari (明かり): Autonomous Research Paper Digest & QA Agent"
 authors = [{ name = "Akari Contributors" }]
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
 dependencies = [
-    "requests>=2.31",
-    "feedparser>=6.0",
-    "PyMuPDF>=1.24",
-    "chromadb>=0.5",
-    "sentence-transformers>=3.0",
-    "google-genai>=1.0",
-    "python-dotenv>=1.0",
-    "rich>=13.0",
+    "requests>=2.31.0,<3.0.0",
+    "feedparser>=6.0.10,<7.0.0",
+    "PyMuPDF>=1.24.0,<2.0.0",
+    "chromadb>=0.5.0,<0.6.0",
+    "sentence-transformers>=3.0.0,<4.0.0",
+    "google-genai>=1.0.0,<2.0.0",
+    "python-dotenv>=1.0.0,<2.0.0",
+    "rich>=13.7.0,<16.0.0",
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pytest>=7.0",
-]
 groq = [
-    "groq>=0.9",
+    "groq>=0.9.0,<1.0.0",
 ]
+dev = [
+    "pytest>=7.4.0,<9.0.0",
+    "pytest-mock>=3.12.0,<4.0.0",
+    "ruff>=0.4.0,<1.0.0",
+    "mypy>=1.10.0,<2.0.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
+ignore = ["E501", "B008"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+check_untyped_defs = true
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning:chromadb.*",
+    "ignore::pytest_asyncio.plugin.PytestDeprecationWarning",
+]

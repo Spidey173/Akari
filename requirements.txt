@@ -1,11 +1,9 @@
-requests>=2.31
-feedparser>=6.0
-PyMuPDF>=1.24
-chromadb>=0.5
-sentence-transformers>=3.0
-google-genai>=1.0
-python-dotenv>=1.0
-rich>=13.0
-
-# Optional, only needed if using --provider groq
-groq>=0.9
+# Akari Core Dependencies (constrained)
+requests>=2.31.0,<3.0.0
+feedparser>=6.0.10,<7.0.0
+PyMuPDF>=1.24.0,<2.0.0
+chromadb>=0.5.0,<0.6.0
+sentence-transformers>=3.0.0,<4.0.0
+google-genai>=1.0.0,<2.0.0
+python-dotenv>=1.0.0,<2.0.0
+rich>=13.7.0,<16.0.0

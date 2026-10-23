@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  lint-and-test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Code Quality & Linting (Ruff)
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Type Checking (Mypy)
+        run: |
+          mypy agent/ tests/
+
+      - name: Run Deterministic Offline Test Suite
+        env:
+          AKARI_OFFLINE_TEST: "1"
+        run: |
+          pytest tests/ -v
+
+      - name: Run Grounding & Retrieval Evaluation Benchmark
+        env:
+          AKARI_OFFLINE_TEST: "1"
+        run: |
+          python -m agent.evaluation

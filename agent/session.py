@@ -6,27 +6,33 @@ Stores processed paper digests and index metadata in a local SQLite database
 1. Instant resumption into interactive QA without re-downloading or re-embedding.
 2. Listing previously analyzed papers (`python main.py --list-sessions`).
 3. Persistent caching across terminal sessions and reboots.
+4. Concurrent-safe operations with SQLite WAL journal mode and busy timeouts.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import time
 from typing import Optional
 
+from agent.config import DEFAULT_DB_PATH
 from agent.state import Briefing, GraphState, NodeStatus, PaperMetadata, QAExchange
 
-DEFAULT_CACHE_DIR = os.path.expanduser("~/.cache/akari")
-DEFAULT_DB_PATH = os.path.join(DEFAULT_CACHE_DIR, "sessions.db")
+logger = logging.getLogger(__name__)
 
 
 def get_db(db_path: str = DEFAULT_DB_PATH) -> sqlite3.Connection:
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    """Opens a SQLite connection with WAL mode and concurrency busy timeouts."""
+    db_dir = os.path.dirname(os.path.abspath(db_path))
+    os.makedirs(db_dir, exist_ok=True)
+    conn = sqlite3.connect(db_path, timeout=30.0)
     conn.row_factory = sqlite3.Row
     with conn:
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA busy_timeout=5000;")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS sessions (
@@ -47,55 +53,71 @@ def get_db(db_path: str = DEFAULT_DB_PATH) -> sqlite3.Connection:
 
 
 def save_session(state: GraphState, db_path: str = DEFAULT_DB_PATH) -> None:
-    """Persists or updates an active GraphState session."""
+    """Persists or updates an active GraphState session.
+    Logs warnings on serialization or database errors without crashing the agent."""
     if not state.selected_paper or not state.briefing or not state.collection_name:
         return
 
-    conn = get_db(db_path)
-    now = time.time()
-    briefing_dict = {
-        "title": state.briefing.title,
-        "authors": state.briefing.authors,
-        "arxiv_id": state.briefing.arxiv_id,
-        "published": state.briefing.published,
-        "link": state.briefing.link,
-        "summary": state.briefing.summary,
-        "problem_statement": state.briefing.problem_statement,
-        "method_bullets": state.briefing.method_bullets,
-        "key_results": state.briefing.key_results,
-        "limitations": state.briefing.limitations,
-        "followup_questions": state.briefing.followup_questions,
-    }
-    qa_list = [
-        {"question": q.question, "answer": q.answer, "grounded": q.grounded, "retrieved_chunk_ids": q.retrieved_chunk_ids}
-        for q in state.qa_history
-    ]
+    try:
+        conn = get_db(db_path)
+        now = time.time()
+        briefing_dict = {
+            "title": state.briefing.title,
+            "authors": state.briefing.authors,
+            "arxiv_id": state.briefing.arxiv_id,
+            "published": state.briefing.published,
+            "link": state.briefing.link,
+            "summary": state.briefing.summary,
+            "problem_statement": state.briefing.problem_statement,
+            "method_bullets": state.briefing.method_bullets,
+            "key_results": state.briefing.key_results,
+            "limitations": state.briefing.limitations,
+            "followup_questions": state.briefing.followup_questions,
+        }
+        qa_list = [
+            {
+                "question": q.question,
+                "answer": q.answer,
+                "grounded": q.grounded,
+                "retrieved_chunk_ids": q.retrieved_chunk_ids,
+            }
+            for q in state.qa_history
+        ]
 
-    with conn:
-        conn.execute(
-            """
-            INSERT INTO sessions (
-                arxiv_id, title, authors, published, pdf_url,
-                collection_name, briefing_json, qa_history_json, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(arxiv_id) DO UPDATE SET
-                briefing_json=excluded.briefing_json,
-                qa_history_json=excluded.qa_history_json,
-                updated_at=excluded.updated_at
-            """,
-            (
-                state.selected_paper.arxiv_id,
-                state.selected_paper.title,
-                json.dumps(state.selected_paper.authors),
-                state.selected_paper.published,
-                state.selected_paper.pdf_url,
-                state.collection_name,
-                json.dumps(briefing_dict),
-                json.dumps(qa_list),
-                now,
-                now,
-            ),
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO sessions (
+                    arxiv_id, title, authors, published, pdf_url,
+                    collection_name, briefing_json, qa_history_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(arxiv_id) DO UPDATE SET
+                    collection_name=excluded.collection_name,
+                    briefing_json=excluded.briefing_json,
+                    qa_history_json=excluded.qa_history_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    state.selected_paper.arxiv_id,
+                    state.selected_paper.title,
+                    json.dumps(state.selected_paper.authors),
+                    state.selected_paper.published,
+                    state.selected_paper.pdf_url,
+                    state.collection_name,
+                    json.dumps(briefing_dict),
+                    json.dumps(qa_list),
+                    now,
+                    now,
+                ),
+            )
+    except Exception as e:
+        logger.error(
+            "Failed to save session for arXiv ID %s to %s: %s",
+            getattr(state.selected_paper, "arxiv_id", "unknown"),
+            db_path,
+            e,
         )
+        raise
 
 
 def load_session(arxiv_id: str, db_path: str = DEFAULT_DB_PATH) -> Optional[GraphState]:
@@ -162,7 +184,9 @@ def list_sessions(db_path: str = DEFAULT_DB_PATH) -> list[dict]:
     """Returns metadata for all cached sessions."""
     conn = get_db(db_path)
     cur = conn.cursor()
-    cur.execute("SELECT arxiv_id, title, published, updated_at FROM sessions ORDER BY updated_at DESC")
+    cur.execute(
+        "SELECT arxiv_id, title, published, updated_at FROM sessions ORDER BY updated_at DESC"
+    )
     rows = cur.fetchall()
     return [
         {
