@@ -96,14 +96,32 @@ class GroqClient(LLMClient):
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
-        resp = self._client.chat.completions.create(
-            model=self.model_name,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=0.2,
-        )
-        content = resp.choices[0].message.content
-        return (content or "").strip()
+
+        # Cap max_tokens if model has a strict output token per minute ceiling (e.g. qwen on Groq on-demand)
+        tokens = min(max_tokens, 950) if "qwen" in self.model_name.lower() else max_tokens
+
+        last_err = None
+        for attempt in range(3):
+            try:
+                resp = self._client.chat.completions.create(
+                    model=self.model_name,
+                    messages=messages,
+                    max_tokens=tokens,
+                    temperature=0.2,
+                )
+                content = resp.choices[0].message.content
+                return (content or "").strip()
+            except Exception as e:
+                last_err = e
+                err_msg = str(e).lower()
+                if "reduce max_tokens" in err_msg or "limit 1000" in err_msg:
+                    tokens = min(tokens, 800)
+                    time.sleep(1)
+                    continue
+                wait = 2**attempt * 2
+                print(f"  [llm] Groq call failed ({e}); retrying in {wait}s...")
+                time.sleep(wait)
+        raise RuntimeError(f"Groq generation failed after retries: {last_err}")
 
 
 class OllamaClient(LLMClient):

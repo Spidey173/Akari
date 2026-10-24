@@ -73,6 +73,8 @@ def choose_candidate_interactively(candidates: list[PaperMetadata]) -> PaperMeta
 
 
 def print_briefing_rich(b: Briefing, parse_degraded: bool = False) -> None:
+    if not b:
+        return
     authors_str = ", ".join(b.authors) if b.authors else "Unknown Authors"
     meta_info = (
         f"[bold white]Title:[/bold white] [bold cyan]{b.title}[/bold cyan]\n"

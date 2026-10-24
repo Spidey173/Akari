@@ -96,7 +96,11 @@ def run(state: GraphState) -> GraphState:
     if state.intent == "specific_paper":
         if state.candidates:
             state.selected_paper = state.candidates[0]
+            state.status = NodeStatus.OK
             state.log("ranking", "Skipped ranking (specific paper lookup).")
+            return state
+        state.fail("ranking", "No candidates available for specific paper lookup.")
+        state.status = NodeStatus.FAILED
         return state
 
     if not state.candidates:

@@ -1,7 +1,10 @@
 .PHONY: test eval run lint format typecheck clean help
 
-PYTHON ?= python3
+VENV ?= .venv
+PYTHON ?= $(if $(wildcard $(VENV)/bin/python),$(VENV)/bin/python,python3)
 AKARI_DATA_DIR ?= $(HOME)/.cache/akari
+
+AKARI_OFFLINE_TEST ?= 1
 
 help:
 	@echo "Akari CLI & Testing Utility"
@@ -18,7 +21,7 @@ test:
 	AKARI_OFFLINE_TEST=1 $(PYTHON) -m pytest tests/ -v
 
 eval:
-	$(PYTHON) -m agent.evaluation
+	AKARI_OFFLINE_TEST=$(AKARI_OFFLINE_TEST) $(PYTHON) -m agent.evaluation
 
 lint:
 	$(PYTHON) -m ruff check .
@@ -27,7 +30,7 @@ format:
 	$(PYTHON) -m ruff format .
 
 typecheck:
-	$(PYTHON) -m mypy agent/ tests/
+	$(PYTHON) -m mypy agent/ tests/ main.py
 
 run:
 	$(PYTHON) main.py

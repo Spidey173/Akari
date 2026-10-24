@@ -77,6 +77,14 @@ def answer_question(
 ) -> QAExchange:
     """Runs one QA turn. Returns the exchange and appends it to state.qa_history."""
     if collection is None:
+        if not state.collection_name:
+            exchange = QAExchange(
+                question=question,
+                answer="I couldn't retrieve any relevant content because no indexed paper collection is active.",
+                grounded=False,
+            )
+            state.qa_history.append(exchange)
+            return exchange
         client = get_chroma_client(path=chroma_path or CHROMA_DIR)
         embed_fn = get_embedding_function()
         collection = client.get_collection(name=state.collection_name, embedding_function=embed_fn)

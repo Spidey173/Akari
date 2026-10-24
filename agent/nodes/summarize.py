@@ -88,16 +88,20 @@ def _format_section_digest(sections: dict[str, str], max_per_section: int = 3500
 
     parts = []
     used_keys = set()
+    covered_categories = set()
 
     for category, aliases in priority_order:
+        if category in covered_categories:
+            continue
         for alias in aliases:
             for sec_name, sec_text in sections.items():
                 if sec_name not in used_keys and (alias in sec_name.lower()):
                     used_keys.add(sec_name)
                     snippet = sec_text[:max_per_section].strip()
                     parts.append(f"[{sec_name.upper()}]\n{snippet}")
+                    covered_categories.add(category)
                     break
-            if category in [p[0] for p in parts]:
+            if category in covered_categories:
                 break
 
     # If priority matching missed other sections, append remaining up to budget

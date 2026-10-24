@@ -22,10 +22,10 @@ import sys
 
 from agent.config import ensure_directories
 from agent.graph import run_pipeline
-from agent.llm_client import build_llm_client
+from agent.llm_client import LLMClient, build_llm_client
 from agent.nodes import qa
 from agent.session import list_sessions, load_session, save_session
-from agent.state import GraphState
+from agent.state import GraphState, NodeStatus
 from agent.ui import (
     choose_candidate_interactively,
     console,
@@ -69,7 +69,7 @@ def briefing_to_dict(state: GraphState) -> dict:
     }
 
 
-def run_qa_loop(state: GraphState, llm) -> None:
+def run_qa_loop(state: GraphState, llm: LLMClient) -> None:
     console.print(
         "[bold cyan]Ask follow-up questions about the paper[/bold cyan] [dim](type 'exit' or 'quit' to stop)[/dim]:\n"
     )
@@ -146,7 +146,7 @@ def main() -> None:
     # 2. Handle --resume <arxiv_id>
     if args.resume:
         cached_state = load_session(args.resume)
-        if not cached_state:
+        if not cached_state or not cached_state.selected_paper or not cached_state.briefing:
             console.print(
                 f"[red]Error:[/red] No cached session found for arXiv ID: [bold]{args.resume}[/bold]"
             )
@@ -181,7 +181,7 @@ def main() -> None:
     picker = choose_candidate_interactively if args.interactive else None
     state = run_pipeline(query, llm, interactive_candidate_picker=picker)
 
-    if state.status.value == "failed":
+    if state.status == NodeStatus.FAILED or not state.selected_paper or not state.briefing:
         console.print("\n[bold red]Run failed. Errors:[/bold red]")
         for err in state.errors:
             console.print(f"  [red]•[/red] {err}")

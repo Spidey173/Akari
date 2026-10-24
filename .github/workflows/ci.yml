@@ -38,7 +38,7 @@ jobs:
 
       - name: Type Checking (Mypy)
         run: |
-          mypy agent/ tests/
+          mypy agent/ tests/ main.py
 
       - name: Run Deterministic Offline Test Suite
         env:
