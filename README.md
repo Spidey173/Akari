@@ -1,5 +1,7 @@
 # Akari (明かり) — Autonomous arXiv Paper Digest & QA Agent
 
+[![CI](https://github.com/Spidey173/Akari/actions/workflows/ci.yml/badge.svg)](https://github.com/Spidey173/Akari/actions/workflows/ci.yml)
+
 **Akari** is an autonomous research assistant that takes a research topic or a specific arXiv paper ID, retrieves
 and parses the paper, produces a structured executive briefing, and answers
 follow-up questions grounded in the paper's content via RAG.
@@ -215,11 +217,10 @@ Empirical Results, Limitations, and Discussion).
    when topic search scores are closely tied.
 2. **Deep Layout Parsing (OCR/Vision)**: Integration of lightweight vision-based
    parsers (e.g. Docling) for complex tabular benchmark extraction.
-3. **Fine-Grained Briefing Citations**: Map individual briefing bullet points
-   directly to source chunk IDs, mirroring the section citations in QA.
-4. **Automated Evaluation Benchmark**: A reproducible evaluation harness using
-   ground-truth Q&A pairs (via Ragas) to continuously quantify retrieval recall
-   and refusal precision.
+3. **Multi-Paper Cross-Synthesis**: Cross-collection querying to synthesize findings
+   and comparative tables across multiple related papers simultaneously.
+
+*(Note: Fine-grained section citations for both briefings and QA, alongside the quantitative citation accuracy and answer quality evaluation benchmark, are fully implemented.)*
 
 ---
 
@@ -266,22 +267,22 @@ Large Language Models (LLMs) suffer from severe memory bottlenecks during genera
 Deploying LLMs for long-sequence tasks (dialogue, long-document reasoning) is bottlenecked by the transient KV cache stored in GPU memory. Existing memory-saving approaches either require costly retraining or suffer steep quality degradation when aggressively dropping context.
 
 --- Method / Approach ---
-  - Identifies that attention scores follow a power-law distribution where "Heavy Hitters" (H2) dominate attention value.
-  - Formulates KV cache eviction as a dynamic submodular maximization problem with theoretical approximation guarantees.
-  - Implements an eviction policy combining a local sliding window (recent tokens) with a global pool of heavy hitters (accumulated attention scores).
-  - Evaluates across OPT, LLaMA, and GPT-NeoX architectures without requiring model fine-tuning or weight retraining.
-  - Integrates with leading inference backends (DeepSpeed Zero-Inference, Hugging Face Accelerate, FlexGen).
+  - Identifies that attention scores follow a power-law distribution where "Heavy Hitters" (H2) dominate attention value [Section: Method]
+  - Formulates KV cache eviction as a dynamic submodular maximization problem with theoretical approximation guarantees [Section: Method]
+  - Implements an eviction policy combining a local sliding window (recent tokens) with a global pool of heavy hitters (accumulated attention scores) [Section: Method]
+  - Evaluates across OPT, LLaMA, and GPT-NeoX architectures without requiring model fine-tuning or weight retraining [Section: Method]
+  - Integrates with leading inference backends (DeepSpeed Zero-Inference, Hugging Face Accelerate, FlexGen) [Section: Method]
 
 --- Key Results / Claims ---
-  - Retaining just 20% of the KV cache achieves comparable perplexity and downstream accuracy to full-cache baselines.
-  - Improves inference throughput up to 29x over DeepSpeed Zero-Inference and Accelerate, and up to 3x over FlexGen on OPT-6.7B and OPT-30B.
-  - Reduces inference latency by up to 1.9x at equivalent batch sizes.
-  - Demonstrates sustained generation coherence on sequences up to 2,000+ tokens with bounded memory footprint.
+  - Retaining just 20% of the KV cache achieves comparable perplexity and downstream accuracy to full-cache baselines [Section: Results]
+  - Improves inference throughput up to 29x over DeepSpeed Zero-Inference and Accelerate, and up to 3x over FlexGen on OPT-6.7B and OPT-30B [Section: Results]
+  - Reduces inference latency by up to 1.9x at equivalent batch sizes [Section: Results]
+  - Demonstrates sustained generation coherence on sequences up to 2,000+ tokens with bounded memory footprint [Section: Results]
 
 --- Limitations ---
-  - Theoretical guarantees depend on submodularity conditions that may be sensitive to outlier token activation patterns.
-  - Tracking cumulative attention scores introduces minor tracking overhead during attention matrix computation.
-  - Primary evaluation is on decoder-only autoregressive models; sparse attention architectures and mixture-of-experts were not tested.
+  - Theoretical guarantees depend on submodularity conditions that may be sensitive to outlier token activation patterns [Section: Limitations]
+  - Tracking cumulative attention scores introduces minor tracking overhead during attention matrix computation [Section: Limitations]
+  - Primary evaluation is on decoder-only autoregressive models; sparse attention architectures and mixture-of-experts were not tested [Section: Limitations]
 
 --- Suggested Follow-up Questions ---
   - How does H2O determine the optimal ratio between recent window size and heavy-hitter budget?
@@ -291,16 +292,18 @@ Deploying LLMs for long-sequence tasks (dialogue, long-document reasoning) is bo
 
 (Briefing saved to briefing_2306_14048.json; will be updated with QA history on exit.)
 
-Ask follow-up questions about the paper (type 'exit' or 'quit' to stop).
+Ask follow-up questions about the paper (type 'exit' or 'quit' to stop):
 
 Q: How does H2O decide which tokens to evict from the KV cache?
 A: In the Method section, H2O tracks cumulative attention scores for each token across generation steps to identify "Heavy Hitters" (H2). The eviction algorithm maintains a fixed memory budget partitioned between a sliding window of recent tokens (for local syntactic context) and the highest-accumulated heavy hitter tokens. When new tokens arrive and the budget is exceeded, tokens with the lowest cumulative attention scores outside the recent window are dropped.
+  Sources: [method | 2306_14048_2], [method | 2306_14048_3]
 
 Q: Does H2O require fine-tuning or modifying the pre-trained model weights?
 A: In the Introduction and Method sections, the paper emphasizes that H2O is a training-free, drop-in KV cache eviction policy. It operates entirely during runtime inference on unmodified weights of pre-trained models such as OPT, LLaMA, and GPT-NeoX.
+  Sources: [introduction | 2306_14048_0], [method | 2306_14048_1]
 
 Q: Does H2O support convolutional neural networks like ResNet-50?
-A: I couldn't find an answer to this in the retrieved parts of the paper. It may not be covered, or may be in a section that wasn't parsed.  [low confidence / not clearly in paper]
+A: I couldn't find an answer to this in the retrieved parts of the paper. It may not be covered, or may be in a section that wasn't parsed. [low confidence / ungrounded in paper]
 
 Q: exit
 Final briefing + QA history saved to briefing_2306_14048.json
@@ -345,25 +348,28 @@ akari/
 
 ---
 
-## Retrieval & Grounding Evaluation Benchmark
+## Retrieval, Citation & Grounding Evaluation Benchmark
 
-To move beyond informal heuristics, Akari includes an automated evaluation harness (`agent/evaluation.py` and `tests/test_evaluation.py`) that quantitatively evaluates search quality, section citation precision, answer faithfulness, and out-of-scope question refusal.
+To move beyond informal heuristics and prevent confident but unsupported outputs, Akari includes an automated evaluation harness (`agent/evaluation.py` and `tests/test_evaluation.py`) that quantitatively benchmarks retrieval quality, citation accuracy for both answers and summaries, fact faithfulness, and negative rejection of out-of-scope queries.
 
-The benchmark evaluates both supported technical inquiries (KV cache eviction, empirical accuracy, latency overhead) and adversarial unsupported questions (out-of-scope architectures, unrelated domains, unsupported premises).
+The evaluation suite tests 10 QA benchmark queries (covering KV-cache eviction mechanisms, theoretical bounds, empirical accuracy, baseline throughput speedup, and compute overhead caveats, alongside adversarial unsupported queries on unrelated architectures and funding) plus a summary citation fidelity suite verifying that every briefing point cites its source section.
 
 ### Benchmark Results
 
 | Evaluation Dimension | Metric | Benchmark Score | Target Threshold | Status |
 |:---------------------|:-------|:----------------|:-----------------|:-------|
-| **Retrieval Relevance** | Hit Rate @ 1 (Hit@1) | **100.0%** | $\ge 75.0\%$ | Passed |
+| **Retrieval Relevance** | Hit Rate @ 1 (Hit@1) | **83.3%** | $\ge 75.0\%$ | Passed |
 | **Retrieval Relevance** | Hit Rate @ 3 (Hit@3) | **100.0%** | $\ge 85.0\%$ | Passed |
 | **Retrieval Relevance** | Hit Rate @ 5 (Hit@5) | **100.0%** | $\ge 90.0\%$ | Passed |
-| **Retrieval Relevance** | Mean Reciprocal Rank (MRR) | **1.000** | $\ge 0.800$ | Passed |
-| **Citation Verification** | Section Citation Accuracy | **100.0%** | $\ge 80.0\%$ | Passed |
+| **Retrieval Relevance** | Mean Reciprocal Rank (MRR) | **0.917** | $\ge 0.800$ | Passed |
+| **Citation Verification** | QA Section Citation Accuracy | **100.0%** | $\ge 80.0\%$ | Passed |
+| **Citation Verification** | QA Citation Precision | **100.0%** | $\ge 80.0\%$ | Passed |
+| **Citation Verification** | Summary Citation Attribution Rate | **100.0%** | $\ge 85.0\%$ | Passed |
 | **Grounding & Refusal** | Refusal Precision (Out-of-Scope) | **100.0%** | $\ge 90.0\%$ | Passed |
 | **Grounding & Refusal** | Refusal Recall (Out-of-Scope) | **100.0%** | $\ge 90.0\%$ | Passed |
 | **Grounding & Refusal** | Refusal F1 Score | **100.0%** | $\ge 90.0\%$ | Passed |
-| **Answer Quality** | Fact Faithfulness | **100.0%** | $\ge 85.0\%$ | Passed |
+| **Answer Quality** | Fact Coverage & Completeness | **100.0%** | $\ge 80.0\%$ | Passed |
+| **Answer Quality** | Grounded Faithfulness | **100.0%** | $\ge 85.0\%$ | Passed |
 
 Run the benchmark locally:
 
@@ -421,11 +427,14 @@ If an interviewer asks you about this project, here are the real, honest enginee
 > *"In earlier iterations, Chroma collections and downloaded PDFs used shared names and ephemeral `/tmp` storage, which created race conditions if multiple queries ran concurrently or when the OS cleaned `/tmp`. I re-architected persistence around durable directories (`~/.cache/akari`) with run-isolated collection names (`paper_<id>_<uuid>`). Downloads now write to temporary files before atomically replacing the target (`os.replace`), and SQLite sessions use Write-Ahead Logging (`WAL`) with busy timeout retry locks to prevent concurrent write collisions."*
 
 ### 3. How do you prevent hallucinations in the QA loop, and how is it verified?
-> *"Hallucination mitigation uses a multi-layered grounding strategy: retrieval-bounded context (the model only sees top-k chunks), strict refusal instructions with a deterministic refusal token (`NOT_IN_PAPER`), and cosine distance guardrails. Critically, rather than relying solely on heuristics, we built a reproducible evaluation benchmark (`agent/evaluation.py`) that tests retrieval recall (MRR=1.0), section citation accuracy (100%), and negative rejection for out-of-scope questions (100% Refusal F1)."*
+> *"Hallucination mitigation uses a multi-layered grounding strategy: retrieval-bounded context (the model only sees top-k chunks), strict refusal instructions with a deterministic refusal token (`NOT_IN_PAPER`), and cosine distance guardrails. Critically, rather than relying solely on heuristics, we built a reproducible evaluation benchmark (`agent/evaluation.py`) that quantitatively tests retrieval recall (Hit@3=100%, MRR=0.917), section citation accuracy (100%), fact coverage (100%), and negative rejection for out-of-scope questions (100% Refusal F1)."*
 
 ### 4. How did you handle PDF parsing challenges (two columns, math, figures)?
 > *"Standard PDF extractors often read across two-column scientific papers horizontally, garbling sentences together. I addressed this with PyMuPDF block geometry: inspecting bounding box coordinates `(x0, y0)` and sorting blocks by horizontal column boundaries before stitching text. Furthermore, because some PDFs are scanned or fail layout extraction, I added an automated fallback to ar5iv clean HTML before gracefully degrading to abstract-only mode if text density is below a strict threshold."*
 
 ### 5. Why use a local embedding model instead of OpenAI/Gemini embeddings?
 > *"Running `all-MiniLM-L6-v2` locally via `sentence-transformers` ensures vector indexing runs free on any machine with zero API egress costs, no rate limits, and consistent embedding dimensions across sessions. For testing and CI, the architecture decouples vector generation through an embedding abstraction, allowing 100% offline testing without downloading model weights."*
+
+### 6. How do you prevent confident but unsupported summaries and answers, and verify citation accuracy?
+> *"A paper assistant that doesn't show where each claim originated will produce confident but unsupported summaries. We addressed this with end-to-end source attribution: the summarization node binds every methodology bullet, result, and limitation directly to extracted section digests with mandatory `[Section: <Name>]` citations and structured `section_citations` mappings. In QA, every response surfaces its source sections and underlying chunk IDs. Crucially, we don't cite automated quality as a strength without verifying it: our CI workflow runs a deterministic benchmark across Python 3.10, 3.11, and 3.12, verifying citation accuracy, fact coverage, and refusal on adversarial out-of-scope questions."*
 

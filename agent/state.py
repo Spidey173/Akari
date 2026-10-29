@@ -50,6 +50,8 @@ class QAExchange:
     answer: str
     grounded: bool
     retrieved_chunk_ids: list[str] = field(default_factory=list)
+    sources: list[dict[str, str]] = field(default_factory=list)
+    cited_sections: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -65,6 +67,7 @@ class Briefing:
     key_results: list[str]
     limitations: list[str]
     followup_questions: list[str]
+    section_citations: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass

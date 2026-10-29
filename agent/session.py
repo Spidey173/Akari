@@ -73,6 +73,7 @@ def save_session(state: GraphState, db_path: str = DEFAULT_DB_PATH) -> None:
             "key_results": state.briefing.key_results,
             "limitations": state.briefing.limitations,
             "followup_questions": state.briefing.followup_questions,
+            "section_citations": getattr(state.briefing, "section_citations", {}),
         }
         qa_list = [
             {
@@ -80,6 +81,8 @@ def save_session(state: GraphState, db_path: str = DEFAULT_DB_PATH) -> None:
                 "answer": q.answer,
                 "grounded": q.grounded,
                 "retrieved_chunk_ids": q.retrieved_chunk_ids,
+                "sources": getattr(q, "sources", []),
+                "cited_sections": getattr(q, "cited_sections", []),
             }
             for q in state.qa_history
         ]
@@ -155,6 +158,7 @@ def load_session(arxiv_id: str, db_path: str = DEFAULT_DB_PATH) -> Optional[Grap
         key_results=b_data["key_results"],
         limitations=b_data["limitations"],
         followup_questions=b_data["followup_questions"],
+        section_citations=b_data.get("section_citations", {}),
     )
 
     qa_history = [
@@ -163,6 +167,8 @@ def load_session(arxiv_id: str, db_path: str = DEFAULT_DB_PATH) -> Optional[Grap
             answer=item["answer"],
             grounded=item.get("grounded", True),
             retrieved_chunk_ids=item.get("retrieved_chunk_ids", []),
+            sources=item.get("sources", []),
+            cited_sections=item.get("cited_sections", []),
         )
         for item in qa_data
     ]

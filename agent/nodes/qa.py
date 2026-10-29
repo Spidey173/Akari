@@ -39,8 +39,9 @@ If the excerpts do not contain enough information to answer the question,
 respond with exactly: {REFUSAL_MARKER}
 Do not guess, speculate, or fill gaps with general knowledge in that case.
 
-When you can answer, be concise and cite which part of the paper you're
-drawing from in plain language (e.g. "In the Method section...")."""
+When you can answer, be concise and explicitly cite which part of the paper you are
+drawing from in plain language (e.g. "In the Method section...").
+Always ensure your claims are strictly grounded in the retrieved excerpts."""
 
 PROMPT_TEMPLATE = """Retrieved excerpts from the paper:
 {context}
@@ -126,11 +127,25 @@ def answer_question(
     if distances and distances[0] > 0.85:
         grounded = False
 
+    sources = [
+        {
+            "chunk_id": ids[i],
+            "section": str(metas[i].get("section", "unknown")),
+            "snippet": docs[i][:150].strip(),
+        }
+        for i in range(len(ids))
+    ]
+    cited_sections = list(
+        dict.fromkeys(str(metas[i].get("section", "unknown")) for i in range(len(metas)))
+    )
+
     exchange = QAExchange(
         question=question,
         answer=answer_text,
         grounded=grounded,
         retrieved_chunk_ids=ids,
+        sources=sources,
+        cited_sections=cited_sections if grounded else [],
     )
     state.qa_history.append(exchange)
     return exchange

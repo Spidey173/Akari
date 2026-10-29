@@ -60,10 +60,18 @@ def briefing_to_dict(state: GraphState) -> dict:
         "key_results": b.key_results,
         "limitations": b.limitations,
         "followup_questions": b.followup_questions,
+        "section_citations": getattr(b, "section_citations", {}),
         "parse_degraded": state.parse_degraded,
         "num_chunks": len(state.chunks),
         "qa_history": [
-            {"question": ex.question, "answer": ex.answer, "grounded": ex.grounded}
+            {
+                "question": ex.question,
+                "answer": ex.answer,
+                "grounded": ex.grounded,
+                "retrieved_chunk_ids": ex.retrieved_chunk_ids,
+                "sources": getattr(ex, "sources", []),
+                "cited_sections": getattr(ex, "cited_sections", []),
+            }
             for ex in state.qa_history
         ],
     }
@@ -86,7 +94,15 @@ def run_qa_loop(state: GraphState, llm: LLMClient) -> None:
 
         exchange = qa.answer_question(state, llm, question)
         if exchange.grounded:
-            console.print(f"[bold cyan]A:[/bold cyan] {exchange.answer}\n")
+            console.print(f"[bold cyan]A:[/bold cyan] {exchange.answer}")
+            if exchange.sources:
+                sources_str = ", ".join(
+                    f"[{s.get('section', '?')} | {s.get('chunk_id', '')}]"
+                    for s in exchange.sources[:3]
+                )
+                console.print(f"  [dim cyan]Sources: {sources_str}[/dim cyan]\n")
+            else:
+                console.print()
         else:
             console.print(
                 f"[bold cyan]A:[/bold cyan] {exchange.answer} [yellow][low confidence / ungrounded in paper][/yellow]\n"

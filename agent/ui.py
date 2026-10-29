@@ -4,6 +4,8 @@ Terminal UI formatting and interactive CLI helpers using Rich.
 
 from __future__ import annotations
 
+import re
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -103,15 +105,33 @@ def print_briefing_rich(b: Briefing, parse_degraded: bool = False) -> None:
 
     console.print("[bold magenta]3. Method & Approach[/bold magenta]")
     for item in b.method_bullets:
-        console.print(f"  [cyan]•[/cyan] {item}")
+        formatted = re.sub(
+            r"\[Section:\s*([^\]]+)\]",
+            r"[dim cyan][Section: \1][/dim cyan]",
+            item,
+            flags=re.IGNORECASE,
+        )
+        console.print(f"  [cyan]•[/cyan] {formatted}")
 
     console.print("\n[bold magenta]4. Key Results & Claims[/bold magenta]")
     for item in b.key_results:
-        console.print(f"  [green]•[/green] {item}")
+        formatted = re.sub(
+            r"\[Section:\s*([^\]]+)\]",
+            r"[dim cyan][Section: \1][/dim cyan]",
+            item,
+            flags=re.IGNORECASE,
+        )
+        console.print(f"  [green]•[/green] {formatted}")
 
     console.print("\n[bold magenta]5. Limitations & Caveats[/bold magenta]")
     for item in b.limitations:
-        console.print(f"  [yellow]•[/yellow] {item}")
+        formatted = re.sub(
+            r"\[Section:\s*([^\]]+)\]",
+            r"[dim cyan][Section: \1][/dim cyan]",
+            item,
+            flags=re.IGNORECASE,
+        )
+        console.print(f"  [yellow]•[/yellow] {formatted}")
 
     console.print("\n[bold magenta]6. Suggested Follow-up Questions[/bold magenta]")
     for item in b.followup_questions:
