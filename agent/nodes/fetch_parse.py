@@ -84,7 +84,8 @@ def _extract_text_layout_aware(pdf_path: str) -> tuple[str, int]:
     doc = fitz.open(pdf_path)
     all_pages_text = []
 
-    for page in doc:
+    for page_num in range(len(doc)):
+        page = doc[page_num]
         # Blocks: (x0, y0, x1, y1, "text", block_no, block_type)
         blocks = page.get_text("blocks")
         # Filter text blocks only (block_type == 0)

@@ -67,7 +67,7 @@ def get_embedding_function(model_name: Optional[str] = None) -> Any:
     from chromadb.utils import embedding_functions
 
     model = model_name or EMBEDDING_MODEL_NAME
-    return embedding_functions.SentenceTransformerEmbeddingFunction(model_name=model)
+    return embedding_functions.SentenceTransformerEmbeddingFunction(model_name=model)  # type: ignore[attr-defined]
 
 
 def set_embedding_function(fn: Any) -> None:
